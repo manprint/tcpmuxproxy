@@ -1,5 +1,53 @@
 # Proxy
 
+## Compose Go-Alpine
+
+```
+services:
+  proxytunnel-alpine-go:
+    image: fabiop85/proxytunnel:alpine-go
+    container_name: proxytunnel-alpine-go
+    restart: always
+    ports:
+      - "6000:6000"
+    network_mode: "bridge"
+    command: >
+      /proxy -listen 6000 -proxy sub.mydomain.tld:443 -remote level.sub.mydomain.tld:5900 -user admin -pass abc
+```
+
+## Compose Go-Debian
+
+```
+services:
+  proxytunnel-go:
+    image: fabiop85/proxytunnel:go
+    container_name: proxytunnel-go
+    restart: always
+    ports:
+      - "6000:6000"
+    network_mode: "bridge"
+    command: >
+      proxy -listen 6000 -proxy sub.mydomain.tld:443 -remote level.sub.mydomain.tld:5900 -user admin -pass abc
+```
+
+## Compose proxytunnel native
+
+```
+services:
+  proxytunnel:
+    image: fabiop85/proxytunnel:latest
+    container_name: proxytunnel
+    network_mode: bridge
+    restart: always
+    ports:
+      - 6000:6000
+    environment:
+      - BASIC_AUTH=admin:admin
+      - PROXY_HOST=3lev.mydomain.tld:443
+      - PROXY_REMOTE=4lev.3lev.mydomain.tld:5900
+      - LOCAL_PORT=6000
+```
+
 ## Help
 
 ```
