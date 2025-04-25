@@ -1,0 +1,13 @@
+services:
+  proxytunnel:
+    image: fabiop85/proxytunnel:latest
+    container_name: proxytunnel
+    network_mode: bridge
+    restart: always
+    ports:
+      - 6000:6000
+    environment:
+      - BASIC_AUTH=admin:admin
+      - PROXY_HOST=3lev.mydomain.tld:443
+      - PROXY_REMOTE=4lev.3lev.mydomain.tld:5900
+      - LOCAL_PORT=6000
