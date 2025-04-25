@@ -2,6 +2,9 @@ package main
 
 import (
     "bufio"
+    "crypto/tls"
+    "encoding/base64"
+    "encoding/json"
     "flag"
     "fmt"
     "io"
@@ -10,77 +13,123 @@ import (
     "net/http"
     "net/url"
     "os"
+    "strings"
+    "time"
 )
 
-func handleConnection(localConn net.Conn, proxyAddr, remoteHost string) {
+var (
+    useJSONLog bool
+)
+
+func logMsg(msg string, fields ...any) {
+    if useJSONLog {
+        data := map[string]any{"msg": msg, "ts": time.Now().Format(time.RFC3339)}
+        for i := 0; i < len(fields)-1; i += 2 {
+            key := fmt.Sprintf("%v", fields[i])
+            val := fields[i+1]
+            data[key] = val
+        }
+        json.NewEncoder(os.Stdout).Encode(data)
+    } else {
+        log.Printf(msg, fields...)
+    }
+}
+
+func isBrokenPipe(err error) bool {
+    return err != nil && strings.Contains(err.Error(), "broken pipe")
+}
+
+func handleConnection(localConn net.Conn, proxyAddr, remoteHost, proxyUser, proxyPass string, timeout time.Duration, useTLS bool) {
     defer localConn.Close()
 
-    log.Printf("Connessione accettata da %s, inoltro tramite proxy %s verso %s", localConn.RemoteAddr(), proxyAddr, remoteHost)
+    logMsg("Connessione accettata", "client", localConn.RemoteAddr(), "target", remoteHost)
 
-    proxyConn, err := net.Dial("tcp", proxyAddr)
+    var proxyConn net.Conn
+    var err error
+
+    d := net.Dialer{Timeout: timeout}
+    if useTLS {
+        proxyConn, err = tls.DialWithDialer(&d, "tcp", proxyAddr, &tls.Config{
+            InsecureSkipVerify: true,
+        })
+    } else {
+        proxyConn, err = d.Dial("tcp", proxyAddr)
+    }
     if err != nil {
-        log.Printf("Errore nel connettersi al proxy %s: %v", proxyAddr, err)
+        logMsg("Errore connessione al proxy", "proxy", proxyAddr, "error", err.Error())
         return
     }
     defer proxyConn.Close()
 
-    log.Printf("Connessione al proxy %s stabilita", proxyAddr)
+    headers := make(http.Header)
+    if proxyUser != "" && proxyPass != "" {
+        auth := base64.StdEncoding.EncodeToString([]byte(fmt.Sprintf("%s:%s", proxyUser, proxyPass)))
+        headers.Set("Proxy-Authorization", "Basic "+auth)
+    }
 
     req := &http.Request{
         Method: "CONNECT",
         URL:    &url.URL{},
         Host:   remoteHost,
-        Header: make(http.Header),
+        Header: headers,
     }
 
     err = req.Write(proxyConn)
     if err != nil {
-        log.Printf("Errore nell'invio della richiesta CONNECT: %v", err)
+        logMsg("Errore invio richiesta CONNECT", "error", err.Error())
         return
     }
 
-    log.Printf("Richiesta CONNECT inviata al proxy %s per %s", proxyAddr, remoteHost)
-
     resp, err := http.ReadResponse(bufio.NewReader(proxyConn), req)
     if err != nil {
-        log.Printf("Errore nella lettura della risposta del proxy: %v", err)
+        logMsg("Errore risposta dal proxy", "error", err.Error())
         return
     }
     defer resp.Body.Close()
 
     if resp.StatusCode != 200 {
-        log.Printf("Proxy ha risposto con codice %d", resp.StatusCode)
+        logMsg("Proxy ha rifiutato la connessione", "status", resp.Status)
         return
     }
 
-    log.Printf("Proxy ha risposto con successo, avvio il relay tra connessioni")
+    logMsg("Tunnel stabilito", "client", localConn.RemoteAddr(), "remote", remoteHost)
+
+    done := make(chan struct{})
 
     go func() {
         _, err := io.Copy(proxyConn, localConn)
-        if err != nil {
-            log.Printf("Errore durante il relay verso il proxy: %v", err)
+        if err != nil && !isBrokenPipe(err) {
+            logMsg("Errore relay verso proxy", "error", err.Error())
         }
+        close(done)
     }()
+
     _, err = io.Copy(localConn, proxyConn)
-    if err != nil {
-        log.Printf("Errore durante il relay verso il client: %v", err)
+    if err != nil && !isBrokenPipe(err) {
+        logMsg("Errore relay verso client", "error", err.Error())
     }
+
+    <-done
+    logMsg("Connessione chiusa", "client", localConn.RemoteAddr())
 }
 
 func main() {
-    localPort := flag.Int("listen", 0, "Porta su cui rimanere in ascolto (obbligatorio)")
-    proxyHost := flag.String("proxy", "", "Indirizzo del proxy (host:porta) (obbligatorio)")
-    remote := flag.String("remote", "", "Host remoto da raggiungere tramite proxy (host:porta) (obbligatorio)")
-
-    flag.Usage = func() {
-        fmt.Fprintf(os.Stderr, "Utilizzo: %s -listen <porta> -proxy <proxy_host:porta> -remote <remote_host:porta>\n", os.Args[0])
-        flag.PrintDefaults()
-    }
+    localPort := flag.Int("listen", 0, "Porta locale da esporre")
+    proxyHost := flag.String("proxy", "", "Proxy (host:porta)")
+    remote := flag.String("remote", "", "Destinazione remota (host:porta)")
+    proxyUser := flag.String("user", "", "Username proxy (opzionale)")
+    proxyPass := flag.String("pass", "", "Password proxy (opzionale)")
+    timeoutSec := flag.Int("timeout", 30, "Timeout connessioni in secondi")
+    tlsFlag := flag.Bool("tls", false, "Usa TLS verso il proxy (HTTPS)")
+    jsonLogFlag := flag.Bool("jsonlog", true, "Log in formato JSON")
 
     flag.Parse()
 
+    useJSONLog = *jsonLogFlag
+    timeout := time.Duration(*timeoutSec) * time.Second
+
     if *localPort == 0 || *proxyHost == "" || *remote == "" {
-        log.Println("Errore: tutti i parametri -listen, -proxy e -remote sono obbligatori")
+        fmt.Println("Parametri mancanti.")
         flag.Usage()
         os.Exit(1)
     }
@@ -88,16 +137,17 @@ func main() {
     listenAddr := fmt.Sprintf(":%d", *localPort)
     listener, err := net.Listen("tcp", listenAddr)
     if err != nil {
-        log.Fatalf("Errore nell'ascolto su %s: %v", listenAddr, err)
+        log.Fatalf("Errore ascolto: %v", err)
     }
-    log.Printf("In ascolto su %s, inoltro a %s via proxy %s", listenAddr, *remote, *proxyHost)
+
+    logMsg("In ascolto", "porta", *localPort, "proxy", *proxyHost, "destinazione", *remote)
 
     for {
         conn, err := listener.Accept()
         if err != nil {
-            log.Printf("Errore accettando connessione: %v", err)
+            logMsg("Errore accettando connessione", "error", err.Error())
             continue
         }
-        go handleConnection(conn, *proxyHost, *remote)
+        go handleConnection(conn, *proxyHost, *remote, *proxyUser, *proxyPass, timeout, *tlsFlag)
     }
 }
