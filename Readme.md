@@ -101,14 +101,31 @@ Soluzione con proxytunnel
 
 windows: `https://github.com/proxytunnel/proxytunnel/releases/download/v1.12.3/proxytunnel-v1.12.3-x86_64-windows-msys.zip`
 
-mac: brew `install proxytunnel`
+mac: `brew install proxytunnel`
 
 alpine: `apk add proxytunnel`
 
 debian: `apt install proxytunnel`
 
 ```
-proxytunnel -p sub.mydomain.tld:443 -d level.sub.mydomain.tld:5900 -a 6000 -P admin:abc
+proxytunnel -p sub.mydomain.tld:443 -d level.sub.mydomain.tld:5900 -a 6000 -P test:test
+./proxytunnel.exe -v -p sub.mydomain.tld:443 -d level.sub.mydomain.tld:5900 -a 0.0.0.0:7000 -P test:test
+```
+
+## Android Termux
+
+Install android from Fdroid (not google store!)
+
+```
+$ pkg in proot-distro
+$ proot-distro install debian
+$ proot-distro login Debian
+root@localhost:~# apt update
+root@localhost:~# apt install proxytunnel
+```
+
+```
+proot-distro login debian --bind /storage/emulated/0:/root/storage
 ```
 
 ## Extra - Socat
