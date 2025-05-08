@@ -31,6 +31,7 @@ jobs:
           CGO_ENABLED=0 GOOS=windows GOARCH=arm64 go build -o dist/proxy-windows-arm64.exe
           CGO_ENABLED=0 GOOS=darwin GOARCH=amd64 go build -o dist/proxy-darwin-amd64
           CGO_ENABLED=0 GOOS=darwin GOARCH=arm64 go build -o dist/proxy-darwin-arm64
+          CGO_ENABLED=0 GOOS=android GOARCH=arm64 go build -o dist/proxy-android-arm64
 
       - name: Create GitHub Release
         uses: softprops/action-gh-release@v2
